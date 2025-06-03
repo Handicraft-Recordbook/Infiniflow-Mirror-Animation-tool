@@ -1,0 +1,385 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <title>InfiniFlowアニメーションツール</title>
+  <style>
+    body {
+      background: #222;
+      color: white;
+      font-family: sans-serif;
+      padding: 20px;
+    }
+
+    .container {
+      display: flex;
+      gap: 40px;
+      flex-wrap: wrap;
+    }
+
+    .editor {
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+      flex: 1;
+    }
+
+    .frame-label {
+      margin-bottom: 5px;
+      font-weight: bold;
+    }
+
+    .frame {
+      display: flex;
+      flex-direction: column;
+    }
+
+    .grid {
+      display: grid;
+      gap: 2px;
+    }
+
+    .preview {
+      width: fit-content;
+    }
+
+    .preview-grid {
+      display: grid;
+      gap: 1px;
+    }
+
+    .pixel, .preview-pixel {
+      background-color: #000000;
+      border-radius: 2px;
+      transition: 0.1s;
+    }
+
+    .pixel {
+      width: 20px;
+      height: 20px;
+      cursor: pointer;
+    }
+
+    .preview-pixel {
+      width: 10px;
+      height: 10px;
+    }
+
+    .palette {
+      margin: 10px 0;
+    }
+
+    .color {
+      display: inline-block;
+      width: 24px;
+      height: 24px;
+      margin: 0 5px;
+      border: 2px solid white;
+      cursor: pointer;
+      border-radius: 4px;
+    }
+
+    .color.selected {
+      border: 2px solid yellow;
+    }
+
+    .buttons {
+      margin-top: 10px;
+    }
+
+    button {
+      padding: 6px 12px;
+      font-size: 14px;
+      background: #444;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+
+    button:hover {
+      background: #666;
+    }
+  </style>
+</head>
+<body>
+  <h2>🎞️ InfiniFlow Mirrorアニメーションツール</h2>
+  <div class="palette" id="palette"></div>
+    <div style="margin-top: 10px;">
+      🎨 カスタム色追加：
+      <input type="color" id="customColorInput" value="#ffffff">
+      <button onclick="addCustomColor()">追加</button>
+    </div>
+
+
+  <div class="container">
+    <div class="editor">
+      <label>
+        フレーム数：<input type="number" id="frameCountInput" min="1" value="6" style="width: 60px;">
+        横幅：<input type="number" id="frameWidthInput" min="1" value="30" style="width: 60px;">
+        <button onclick="generateFrames()">更新</button>
+      </label>
+      <div id="editor"></div>
+    </div>
+
+    <div class="preview">
+      <label>
+        フレーム切替(秒)：<input type="number" id="intervalInput" min="0.1" step="0.1" value="0.5" style="width: 60px;">
+        <button onclick="updateInterval()">更新</button>
+      </label>
+      <h3>🖼 プレビュー</h3>
+      <div class="preview-grid" id="preview"></div>
+      <div class="buttons">
+        <button onclick="clearAll()">🧼 すべてクリア</button>
+        <button onclick="togglePlayPause()" id="toggleButton">⏸️ 一時停止</button>
+	<button onclick="exportFrames()">💾 エクスポート</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const colors = ['#FF0000', '#00FF00', '#0000FF', '#FFFF00', '#FF00FF', '#00FFFF', '#FFFFFF', '#888888', '#000000'];
+    let selectedColor = colors[0];
+    const frameHeight = 6;
+    let frameWidth = 30;
+
+    const paletteEl = document.getElementById('palette');
+    const editorContainer = document.getElementById('editor');
+    const previewEl = document.getElementById('preview');
+    const frameCountInput = document.getElementById('frameCountInput');
+    const frameWidthInput = document.getElementById('frameWidthInput');
+    const intervalInput = document.getElementById('intervalInput');
+    const toggleButton = document.getElementById('toggleButton');
+
+    let frames = [];
+    let pixelElements = [];
+    let previewPixels = [];
+    let currentFrame = 0;
+    let intervalId = null;
+    let previewInterval = 1000;
+    let isPlaying = true;
+
+    function createPalette() {
+      paletteEl.innerHTML = '';
+      colors.forEach((color, index) => {
+        const swatch = document.createElement('div');
+        swatch.className = 'color';
+        swatch.style.backgroundColor = color;
+        if (color === selectedColor) swatch.classList.add('selected');
+    
+        swatch.addEventListener('click', () => {
+          selectedColor = color;
+          document.querySelectorAll('.color').forEach(c => c.classList.remove('selected'));
+          swatch.classList.add('selected');
+        });
+
+        // 右クリックで削除（初期9色は保護したければ条件を追加）
+        swatch.addEventListener('contextmenu', (e) => {
+          e.preventDefault();
+          if (colors.length > 1) {
+            colors.splice(index, 1);
+            createPalette();
+          }
+        });
+
+        paletteEl.appendChild(swatch);
+      });
+    }
+
+
+    function generateFrames() {
+      const newFrameCount = parseInt(frameCountInput.value);
+      frameWidth = parseInt(frameWidthInput.value);
+
+      // 既存のフレームデータを保持（深コピー）
+      const oldFrames = frames.slice(0, newFrameCount);
+      const oldPixelElements = pixelElements.slice(0, newFrameCount);
+
+      frames = [];
+      pixelElements = [];
+
+      editorContainer.innerHTML = '';
+      createPreviewGrid();
+
+      for (let f = 0; f < newFrameCount; f++) {
+        const frame = document.createElement('div');
+        frame.className = 'frame';
+
+        const label = document.createElement('div');
+        label.className = 'frame-label';
+        label.textContent = `🖌 フレーム ${f + 1}`;
+        // フレーム番号が2以上なら「前のフレームをコピー」ボタンを追加
+        if (f > 0) {
+          const copyBtn = document.createElement('button');
+          copyBtn.textContent = '⬆ 前のフレームをコピー';
+          copyBtn.style.marginLeft = '10px';
+          copyBtn.style.fontSize = '12px';
+          copyBtn.addEventListener('click', () => {
+            copyPreviousFrame(f);
+          });
+          label.appendChild(copyBtn); // ← ボタンを label に追加
+        }
+        frame.appendChild(label);
+
+
+        const grid = document.createElement('div');
+        grid.className = 'grid';
+        grid.style.gridTemplateColumns = `repeat(${frameWidth}, 20px)`;
+        grid.style.gridTemplateRows = `repeat(${frameHeight}, 20px)`;
+
+        frames[f] = [];
+        pixelElements[f] = [];
+
+        for (let y = 0; y < frameHeight; y++) {
+          frames[f][y] = [];
+          pixelElements[f][y] = [];
+
+          for (let x = 0; x < frameWidth; x++) {
+            const pixel = document.createElement('div');
+            pixel.className = 'pixel';
+
+            // 初期色：既存フレームがあれば流用、それ以外は黒
+            let color = '#000000';
+            if (oldFrames[f] && oldFrames[f][y] && oldFrames[f][y][x]) {
+              color = oldFrames[f][y][x];
+            }
+
+            frames[f][y][x] = color;
+            pixel.style.backgroundColor = color;
+
+            pixel.addEventListener('click', () => {
+              frames[f][y][x] = selectedColor;
+              pixel.style.backgroundColor = selectedColor;
+              if (f === currentFrame) updatePreview();
+            });
+
+            pixelElements[f][y][x] = pixel;
+            grid.appendChild(pixel);
+          }
+        }
+
+        frame.appendChild(grid);
+        editorContainer.appendChild(frame);
+      }
+
+      if (currentFrame >= newFrameCount) currentFrame = 0;
+      updatePreview();
+    }
+
+
+    function createPreviewGrid() {
+      previewEl.innerHTML = '';
+      previewPixels = [];
+      previewEl.style.gridTemplateColumns = `repeat(${frameWidth}, 10px)`;
+      previewEl.style.gridTemplateRows = `repeat(${frameHeight * 5}, 10px)`;
+      for (let y = 0; y < frameHeight * 5; y++) {
+        previewPixels[y] = [];
+        for (let x = 0; x < frameWidth; x++) {
+          const pixel = document.createElement('div');
+          pixel.className = 'preview-pixel';
+          previewEl.appendChild(pixel);
+          previewPixels[y][x] = pixel;
+        }
+      }
+    }
+
+    function updatePreview() {
+      if (!frames[currentFrame]) return;
+      const frameData = frames[currentFrame];
+      for (let rep = 0; rep < 5; rep++) {
+        for (let y = 0; y < frameHeight; y++) {
+          for (let x = 0; x < frameWidth; x++) {
+            previewPixels[rep * frameHeight + y][x].style.backgroundColor = frameData[y][x];
+          }
+        }
+      }
+    }
+
+    function startAnimation() {
+      if (intervalId) clearInterval(intervalId);
+      intervalId = setInterval(() => {
+        currentFrame = (currentFrame + 1) % frames.length;
+        updatePreview();
+      }, previewInterval);
+    }
+
+    function updateInterval() {
+      const newInterval = parseFloat(intervalInput.value);
+      if (newInterval >= 0.1) {
+        previewInterval = newInterval * 1000;
+        if (isPlaying) startAnimation();
+      }
+    }
+
+    function togglePlayPause() {
+      if (isPlaying) {
+        clearInterval(intervalId);
+        toggleButton.textContent = '▶️ 再生';
+      } else {
+        startAnimation();
+        toggleButton.textContent = '⏸️ 一時停止';
+      }
+      isPlaying = !isPlaying;
+    }
+
+    function clearAll() {
+      for (let f = 0; f < frames.length; f++) {
+        for (let y = 0; y < frameHeight; y++) {
+          for (let x = 0; x < frameWidth; x++) {
+            frames[f][y][x] = '#000000';
+            pixelElements[f][y][x].style.backgroundColor = '#000000';
+          }
+        }
+      }
+      updatePreview();
+    }
+
+    function exportFrames() {
+      const output = frames.map((frame, frameIndex) => {
+        let flatColors = [];
+        for (let y = 0; y < frameHeight; y++) {
+          for (let x = 0; x < frameWidth; x++) {
+            const hex = frame[y][x].replace('#', '');
+            const r = parseInt(hex.substring(0, 2), 16);
+            const g = parseInt(hex.substring(2, 4), 16);
+            const b = parseInt(hex.substring(4, 6), 16);
+            flatColors.push(`{ ${r}, ${g}, ${b} }`);
+          }
+        }
+        return `const frame${frameIndex} = [\n  ${flatColors.join(',\n  ')}\n];`;
+      }).join('\n\n');
+
+      const win = window.open('', '_blank');
+      win.document.write(`<pre>${output}</pre>`);
+      win.document.close();
+    }
+
+    function addCustomColor() {
+      const customColor = document.getElementById('customColorInput').value;
+      if (!colors.includes(customColor)) {
+        colors.push(customColor);
+        createPalette();
+      }
+    }
+
+    function copyPreviousFrame(f) {
+      if (f <= 0 || !frames[f - 1]) return;
+
+      for (let y = 0; y < frameHeight; y++) {
+        for (let x = 0; x < frameWidth; x++) {
+          const color = frames[f - 1][y][x];
+          frames[f][y][x] = color;
+          pixelElements[f][y][x].style.backgroundColor = color;
+        }
+      }
+
+      if (f === currentFrame) updatePreview();
+    }
+
+
+    createPalette();
+    generateFrames();
+    startAnimation();
+  </script>
+</body>
+</html>
